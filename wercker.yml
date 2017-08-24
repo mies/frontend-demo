@@ -1,0 +1,134 @@
+build:
+  box: node:6
+  steps:
+    - script:
+        name: yarn install
+        code: |
+          yarn --pure-lockfile --cache-folder $WERCKER_CACHE_DIR
+          cp yarn.lock $WERCKER_REPORT_ARTIFACTS_DIR
+
+    - script:
+        name: env
+        code: |
+          echo "Versions":
+          echo Node $(node --version)
+          echo Yarn $(yarn --version)
+
+    - script:
+        name: lint
+        code: |
+          yarn run lint
+
+    - script:
+        name: build
+        code: |
+          export NODE_ENV=production
+          yarn run build
+
+    - script:
+        name: check outdated dependencies
+        code: |
+          TRESHOLD_FAIL=50
+          OUTDATED=$(yarn outdated --colors | tee outdated.txt | grep http | wc -l | tr -d " ")
+          cat outdated.txt
+          MSG="Outdated dependencies: $OUTDATED"
+          if [ "$OUTDATED" -ge $TRESHOLD_FAIL ]; then fail "Too many outdated dependencies ($OUTDATED)"; fi
+          if [ "$OUTDATED" -gt 0 ]; then setMessage "$MSG"; fi
+          rm outdated.txt
+
+    - script:
+        name: check licenses
+        code: |
+          yarn run license-check
+
+    - script:
+        name: cleanup dev dependencies
+        code: |
+          HOME=$WERCKER_CACHE_DIR yarn install --prod --pure-lockfile
+          cp yarn.lock $WERCKER_REPORT_ARTIFACTS_DIR
+
+    - script:
+        name: cleanup files
+        code: |
+          rm logo.png wercker.yml README.md
+
+push-quay:
+  box:
+    id: node:6-alpine
+    cmd: /bin/sh
+  steps:
+    - script:
+        name: add user
+        code: adduser -u 1234 -D web
+
+    - script:
+        name: add libc6-compat
+        code: |
+          # required for grpc to build and run
+          apk add --no-cache --update libc6-compat
+
+    - script:
+        name: run npm rebuild
+        code: |
+          npm rebuild
+
+    - script:
+        name: uninstall npm
+        code: |
+          npm uninstall -g npm
+
+    - script:
+        name: yarn install
+        code: |
+          # required to keep symlink for next to start
+          yarn install --prod --pure-lockfile
+
+    - script:
+        name: forward deployment scripts
+        code: mv deployment $WERCKER_OUTPUT_DIR/deployment
+
+    - script:
+        name: prepare
+        code: |
+          mkdir -p /app
+          mv * /app
+
+    - script:
+        name: cleanup
+        code: |
+          # Nuke Wercker cache so it doesn't get included in the pushed image
+          # https://github.com/wercker/wercker/issues/139
+          rm -rf $WERCKER_CACHE_DIR
+
+    - internal/docker-push:
+        tag: $WERCKER_GIT_BRANCH,$WERCKER_GIT_BRANCH-$WERCKER_GIT_COMMIT
+        working-dir: /app
+        entrypoint: yarn start -- -p 3000
+        ports: "3000"
+        user: 1234
+        env: NODE_ENV=production
+
+deploy-kube:
+  box:
+    id: alpine
+    cmd: /bin/sh
+  steps:
+    - bash-template:
+        cwd: deployment
+
+    - script:
+        name: merge kubernetes files
+        cwd: deployment
+        code: |
+          rm *.template.yml
+          cat *.yml > web.yml
+          cp *.yml $WERCKER_REPORT_ARTIFACTS_DIR/
+          cat web.yml
+
+    - kubectl:
+        name: deploy to kubernetes
+        cwd: deployment
+        server: $KUBERNETES_MASTER
+        token: $KUBERNETES_TOKEN
+        insecure-skip-tls-verify: true
+        command: apply -f web.yml

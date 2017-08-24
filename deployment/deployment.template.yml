@@ -1,0 +1,36 @@
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: web
+  namespace: systema
+  labels:
+    branch: ${WERCKER_GIT_BRANCH}
+    commit: ${WERCKER_GIT_COMMIT}
+spec:
+  replicas: ${TPL_REPLICAS:-1}
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        branch: ${WERCKER_GIT_BRANCH}
+        commit: ${WERCKER_GIT_COMMIT}
+    spec:
+      imagePullSecrets:
+      - name: quay-readonly
+      nodeSelector:
+        caste: patrician
+      containers:
+      - name: server
+        image: quay.io/wercker/systema-web:${WERCKER_GIT_BRANCH}-${WERCKER_GIT_COMMIT}
+        args: []
+        ports:
+        - name: server
+          containerPort: 3000
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
