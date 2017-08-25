@@ -1,4 +1,3 @@
-![Systema](./logo.png)
 
 ## Installation
 
